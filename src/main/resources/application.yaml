@@ -1,3 +1,10 @@
+server:
+  port: 9090
+
 spring:
   application:
     name: Lalafo-parser
+
+  thymeleaf:
+    cache: false
+    encoding: UTF-8
