@@ -8,3 +8,7 @@ spring:
   thymeleaf:
     cache: false
     encoding: UTF-8
+
+logging:
+  level:
+    com.example.demo: DEBUG

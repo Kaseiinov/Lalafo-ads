@@ -42,7 +42,8 @@ public class LalafoServiceImpl implements LalafoService {
             Document doc = loadPage(page);
             if (doc == null) break;
 
-            List<Ad> pageAds = parsePage(doc);
+            int remaining = MAX_ADS - ads.size();
+            List<Ad> pageAds = parsePage(doc, remaining);
             if (pageAds.isEmpty()) {
                 log.warn("Страница №{} не содержит объявлений, останавливаемся", page);
                 break;
@@ -55,17 +56,25 @@ public class LalafoServiceImpl implements LalafoService {
         }
 
         log.info("Загрузка завершена. Итого: {} объявлений", ads.size());
-        return ads.size() > MAX_ADS ? ads.subList(0, MAX_ADS) : ads;
+        log.info("Загрузка завершена. Итого: {} объявлений", ads);
+        return ads;
     }
 
-    private List<Ad> parsePage(Document doc) {
+    private List<Ad> parsePage(Document doc, int remaining) {
         List<Ad> ads = new ArrayList<>();
 
-        Elements titleElements = doc.select("p[class*=LFSubHeading][class*=weight-700]");
-        log.info("Найдено заголовков на странице: {}", titleElements.size());
+        Elements priceElements = doc.select("p[style*='color:#0b78e3']");
 
-        for (Element titleElement : titleElements) {
-            Ad ad = buildAd(titleElement);
+        if (priceElements.isEmpty()) {
+            priceElements = doc.select("p[class*=LFSubHeading][class*=weight-700]");
+        }
+
+        log.info("Найдено элементов на странице: {}", priceElements.size());
+
+        for (Element priceElement : priceElements) {
+            if (ads.size() >= remaining) break;
+
+            Ad ad = buildAd(priceElement);
             if (ad != null) {
                 ads.add(ad);
             }
@@ -98,17 +107,22 @@ public class LalafoServiceImpl implements LalafoService {
 
 
 
-    private Ad buildAd(Element titleElement) {
-        String title = titleElement.text().trim();
-        if (title.isEmpty()) {
-            return null;
-        }
+    private Ad buildAd(Element priceElement) {
+        String price = priceElement.text().trim();
+        if (price.isEmpty()) return null;
 
-        Element card = findParentCard(titleElement);
+        Element card = findParentCard(priceElement);
+
+        Elements paragraphs = card != null ? card.select("p") : new Elements();
+
+        String title = "Без названия";
+        if (paragraphs.size() >= 3) {
+            title = paragraphs.get(2).text().trim();
+        }
 
         return Ad.builder()
                 .title(title)
-                .price(parsePrice(titleElement))
+                .price(price)
                 .city(parseCity(card))
                 .date(parseDate(card))
                 .imageUrl(parseImage(card))
@@ -116,45 +130,54 @@ public class LalafoServiceImpl implements LalafoService {
                 .build();
     }
 
-    private String parsePrice(Element titleElement) {
-        Element nextElement = titleElement.nextElementSibling();
-        if (nextElement != null && !nextElement.text().trim().isEmpty()) {
-            return nextElement.text().trim();
-        }
-        return "Договорная";
-    }
 
     private String parseCity(Element card) {
         if (card == null) return "Кыргызстан";
 
-        Element cityElement = card.selectFirst(
-                "[class*=city], [class*=City], [class*=location], [class*=Location]"
-        );
+        Element link = card.selectFirst("a[href]");
+        if (link == null) return "Кыргызстан";
 
-        if (cityElement != null && !cityElement.text().trim().isEmpty()) {
-            return cityElement.text().trim();
+        String href = link.attr("href");
+        if (href.startsWith("/")) {
+            String[] parts = href.substring(1).split("/");
+            if (parts.length >= 2 && parts[1].equals("ads")) {
+                return slugToCity(parts[0]);
+            }
         }
-
         return "Кыргызстан";
+    }
+
+    private String slugToCity(String slug) {
+        return switch (slug) {
+            case "bishkek"             -> "Бишкек";
+            case "osh"                 -> "Ош";
+            case "kant"                -> "Кант";
+            case "tokmak"              -> "Токмак";
+            case "karakol"             -> "Каракол";
+            case "jalal-abad", "dzhalal-abad" -> "Джалал-Абад";
+            case "naryn"               -> "Нарын";
+            case "talas"               -> "Талас";
+            case "kara-balta"          -> "Кара-Балта";
+            case "nizhnyaya-ala-archa" -> "Нижняя Ала-Арча";
+            case "ges-2"               -> "ГЭС-2";
+            case "orto-saiy"           -> "Орто-Сай";
+            case "manas"               -> "Манас";
+            case "kok-dzhar"           -> "Кок-Жар";
+            case "maevka"              -> "Маёвка";
+            case "novopavlovka"        -> "Новопавловка";
+            case "novopokrovka"        -> "Новопокровка";
+            case "kyrgyzstan"          -> "Кыргызстан";
+            default -> {
+                if (slug.isEmpty()) yield "Кыргызстан";
+                yield Character.toUpperCase(slug.charAt(0)) + slug.substring(1).replace("-", " ");
+            }
+        };
     }
 
 
     private String parseDate(Element card) {
-        if (card == null) return "—";
-
-        Element timeElement = card.selectFirst("time");
-        if (timeElement != null) {
-            String datetime = timeElement.attr("datetime");
-            if (!datetime.isBlank()) return datetime;
-            if (!timeElement.text().trim().isEmpty()) return timeElement.text().trim();
-        }
-
-        Element dateElement = card.selectFirst("[class*=date], [class*=Date], [class*=ago]");
-        if (dateElement != null && !dateElement.text().trim().isEmpty()) {
-            return dateElement.text().trim();
-        }
-
-        return "—";
+        return java.time.LocalDate.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"));
     }
 
     private String parseImage(Element card) {
@@ -163,18 +186,30 @@ public class LalafoServiceImpl implements LalafoService {
         Element img = card.selectFirst("img");
         if (img == null) return PLACEHOLDER_IMAGE;
 
-        String[] possibleAttributes = {"src", "data-src", "data-lazy-src", "data-original"};
-        for (String attr : possibleAttributes) {
+        String[] attrs = {"data-src", "data-lazy-src", "data-original", "src"};
+        for (String attr : attrs) {
             String url = img.attr(attr);
-            if (!url.isBlank() && url.startsWith("http")) {
-                return url;
+            if (url.isBlank()) continue;
+
+            if (url.startsWith("http")) return url;
+            if (url.startsWith("//")) return "https:" + url;
+
+            if (url.contains("/_next/image") && url.contains("url=")) {
+                try {
+                    String encoded = url.substring(url.indexOf("url=") + 4);
+                    int ampIndex = encoded.indexOf("&");
+                    if (ampIndex != -1) encoded = encoded.substring(0, ampIndex);
+                    return java.net.URLDecoder.decode(encoded, "UTF-8");
+                } catch (Exception e) {
+                    log.warn("Не удалось декодировать URL изображения: {}", url);
+                }
             }
         }
-
         return PLACEHOLDER_IMAGE;
     }
 
-    private String parseUrl(Element card) {
+
+        private String parseUrl(Element card) {
         if (card == null) return "https://lalafo.kg";
 
         Element link = card.selectFirst("a[href]");
