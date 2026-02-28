@@ -20,6 +20,8 @@ public class LalafoController {
     @GetMapping("/test-result")
     public String testResult(Model model) {
 
+        lalafoService.fetchAds();
+
         return "ads";
     }
 
