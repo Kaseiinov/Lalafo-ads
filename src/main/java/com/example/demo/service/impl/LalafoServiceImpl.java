@@ -94,18 +94,18 @@ public class LalafoServiceImpl implements LalafoService {
     private Document loadPage(int page) {
         String url = BASE_URL + "?page=" + page;
         try {
-            return Jsoup.connect(url)
+            Document doc = Jsoup.connect(url)
                     .userAgent(USER_AGENT)
                     .header("Accept-Language", "ru-RU,ru;q=0.9")
                     .timeout(20_000)
                     .get();
+
+            return doc;
         } catch (Exception e) {
             log.error("Ошибка при загрузке страницы {}: {}", url, e.getMessage());
             return null;
         }
     }
-
-
 
     private Ad buildAd(Element priceElement) {
         String price = priceElement.text().trim();
@@ -113,11 +113,17 @@ public class LalafoServiceImpl implements LalafoService {
 
         Element card = findParentCard(priceElement);
 
-        Elements paragraphs = card != null ? card.select("p") : new Elements();
-
         String title = "Без названия";
-        if (paragraphs.size() >= 3) {
-            title = paragraphs.get(2).text().trim();
+        if (card != null) {
+            Element titleEl = card.selectFirst("p[class*=lfAdTileTitle], p[class*=AdTileTitle]");
+            if (titleEl != null && !titleEl.text().trim().isEmpty()) {
+                title = titleEl.text().trim();
+            } else {
+                Element link = card.selectFirst("a[href]");
+                if (link != null && !link.text().trim().isEmpty()) {
+                    title = link.text().trim();
+                }
+            }
         }
 
         return Ad.builder()
@@ -173,7 +179,6 @@ public class LalafoServiceImpl implements LalafoService {
             }
         };
     }
-
 
     private String parseDate(Element card) {
         return java.time.LocalDate.now()
